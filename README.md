@@ -69,9 +69,22 @@ By default `ssm-env` exports every parameter it finds under `AWS_ENV_PATH`,
 even if several services share the same path prefix. If you'd rather a
 container only receive the secrets it actually declares it needs, set
 `AWS_ENV_ONLY_DECLARED=true`. `ssm-env` will then only export parameters
-whose name is already present as an environment variable in the
-container — the same mechanism Docker Compose already uses for
-pass-through variables:
+whose name is already present as an environment variable in the container.
+
+**This requires the trailing `=` form in Compose, not the bare-name form.**
+Compose has two different `environment:` syntaxes and they behave
+differently:
+
+- `- DB_HOST` (bare, no `=`) tells Compose to look `DB_HOST` up on the
+  *host* shell (or `.env` file) that ran `docker compose up`. If it's not
+  set there, Compose **does not create the variable in the container at
+  all** — not even empty. `ssm-env` (and anything else checking
+  `os.Environ()`) will never see it.
+- `- DB_HOST=` (trailing `=`, explicit empty value) tells Compose to set
+  `DB_HOST` in the container directly, to an empty string, right now. This
+  is the form `ssm-env` needs — the variable genuinely exists in the
+  container's environment (as an empty value) before `ssm-env` runs, so it
+  shows up as a name `ssm-env` can match against and fill in.
 
 ```yaml
 services:
@@ -80,8 +93,8 @@ services:
     environment:
       - AWS_ENV_PATH=/staging/myapp/
       - AWS_ENV_ONLY_DECLARED=true
-      - DB_HOST      # declared, no value -> ssm-env will fill this one in
-      - DB_PASSWORD  # same
+      - DB_HOST=      # trailing = required -- bare "DB_HOST" is silently ignored
+      - DB_PASSWORD=  # same
 ```
 
 Here, even if `/staging/myapp/` in SSM has a dozen parameters, only
