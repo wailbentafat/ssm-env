@@ -51,6 +51,7 @@ use, so you don't have to template a command string per environment.
 | ---------------- | -------- | ------------------------------------------------------------------------------------------------- |
 | `AWS_ENV_PATH`   | yes      | SSM path prefix to fetch, e.g. `/staging/myapp/`. If unset, `ssm-env` exits `0` with no output.  |
 | `AWS_REGION`     | no       | Falls back to the AWS SDK's normal region resolution (env var, shared config, or instance metadata region). |
+| `AWS_ENV_ONLY_DECLARED` | no | If `true`, only export parameters whose name is already declared as an env var in the container (see below). Default: export everything under the path. |
 
 Credentials are resolved via the standard AWS SDK default credential chain:
 environment variables → shared config/credentials file → EC2 IMDSv2 → ECS
@@ -61,6 +62,34 @@ uses.
 ssm-env --version   # print version and exit
 ssm-env --help       # usage
 ```
+
+### Only exporting declared variables
+
+By default `ssm-env` exports every parameter it finds under `AWS_ENV_PATH`,
+even if several services share the same path prefix. If you'd rather a
+container only receive the secrets it actually declares it needs, set
+`AWS_ENV_ONLY_DECLARED=true`. `ssm-env` will then only export parameters
+whose name is already present as an environment variable in the
+container — the same mechanism Docker Compose already uses for
+pass-through variables:
+
+```yaml
+services:
+  app:
+    image: myapp
+    environment:
+      - AWS_ENV_PATH=/staging/myapp/
+      - AWS_ENV_ONLY_DECLARED=true
+      - DB_HOST      # declared, no value -> ssm-env will fill this one in
+      - DB_PASSWORD  # same
+```
+
+Here, even if `/staging/myapp/` in SSM has a dozen parameters, only
+`DB_HOST` and `DB_PASSWORD` get exported — because those are the only names
+this container already declared. No separate allowlist file to maintain;
+the Compose file you're already writing is the allowlist. If none of the
+fetched parameters match a declared name, `ssm-env` prints a warning to
+stderr (and still exits `0`).
 
 ### Nested parameter names
 

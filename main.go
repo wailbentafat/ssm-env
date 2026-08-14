@@ -10,11 +10,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
+	"github.com/wailbentafat/ssm-env/internal/declared"
 	"github.com/wailbentafat/ssm-env/internal/envname"
 	"github.com/wailbentafat/ssm-env/internal/escape"
 	"github.com/wailbentafat/ssm-env/internal/fetch"
@@ -24,7 +26,8 @@ import (
 var version = "dev"
 
 const (
-	pathEnvVar = "AWS_ENV_PATH"
+	pathEnvVar         = "AWS_ENV_PATH"
+	onlyDeclaredEnvVar = "AWS_ENV_ONLY_DECLARED"
 
 	// fetchTimeout bounds config loading (including IMDS calls) and the SSM
 	// API call, so an unreachable IMDS endpoint or a slow SSM response can't
@@ -83,9 +86,27 @@ func run(args []string, stdout, stderr *os.File) int {
 		return 0
 	}
 
+	onlyDeclared, _ := strconv.ParseBool(os.Getenv(onlyDeclaredEnvVar))
+	var declaredNames map[string]struct{}
+	if onlyDeclared {
+		declaredNames = declared.Names(os.Environ())
+	}
+
+	exported := 0
 	for _, p := range params {
 		name := envname.FromParam(p.Name, path)
+		if onlyDeclared {
+			if _, ok := declaredNames[name]; !ok {
+				continue
+			}
+		}
 		fmt.Fprintf(stdout, "export %s=%s\n", name, escape.ShellSingleQuote(p.Value))
+		exported++
+	}
+
+	if onlyDeclared && exported == 0 {
+		fmt.Fprintf(stderr, "ssm-env: warning: %s is set, but none of the %d parameter(s) under %q match an already-declared "+
+			"environment variable name\n", onlyDeclaredEnvVar, len(params), path)
 	}
 	return 0
 }
