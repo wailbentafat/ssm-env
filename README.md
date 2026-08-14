@@ -50,7 +50,7 @@ use, so you don't have to template a command string per environment.
 | Variable         | Required | Description                                                                                     |
 | ---------------- | -------- | ------------------------------------------------------------------------------------------------- |
 | `AWS_ENV_PATH`   | yes      | SSM path prefix to fetch, e.g. `/staging/myapp/`. If unset, `ssm-env` exits `0` with no output.  |
-| `AWS_REGION`     | no       | Falls back to the AWS SDK's normal region resolution (env var, shared config, or instance metadata region). |
+| `AWS_REGION`     | no       | Falls back to the AWS SDK's normal region resolution: env var → shared config file → EC2 instance metadata region (IMDS), in that order. |
 | `AWS_ENV_ONLY_DECLARED` | no | If `true`, only export parameters whose name is already declared as an env var in the container (see below). Default: export everything under the path. |
 
 Credentials are resolved via the standard AWS SDK default credential chain:

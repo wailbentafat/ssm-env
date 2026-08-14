@@ -67,7 +67,11 @@ func run(args []string, stdout, stderr *os.File) int {
 	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
 	defer cancel()
 
-	cfg, err := config.LoadDefaultConfig(ctx)
+	// WithEC2IMDSRegion makes region resolution fall back to IMDS, mirroring
+	// how credential resolution already does -- without it, an EC2 instance
+	// with no AWS_REGION env var and no ~/.aws/config fails with "missing
+	// region" even though it has a perfectly good IAM role.
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithEC2IMDSRegion())
 	if err != nil {
 		fmt.Fprintf(stderr, "ssm-env: failed to load AWS configuration: %v\n", err)
 		return 1
