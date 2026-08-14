@@ -156,6 +156,11 @@ find-and-replace of where the binary comes from, not a rewrite:
 - Linux only (`linux/amd64`, `linux/arm64`); no Windows containers.
 - No secret rotation or "notify on change" — this is a fetch-once tool.
 
+## Further reading
+
+- [`docs/architecture.md`](docs/architecture.md) — package layout, data flow, why AWS SDK v2 fixes the IMDSv2 crash.
+- [`docs/iam-policy.md`](docs/iam-policy.md) — minimal IAM policy for `ssm:GetParametersByPath` + KMS decrypt, and where it attaches on EC2 vs ECS.
+
 ## Development
 
 ```sh
