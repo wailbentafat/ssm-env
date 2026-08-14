@@ -4,10 +4,13 @@ package envname
 
 import "strings"
 
-// FromParam strips prefix from paramName and trims any leftover leading
-// slash, so "/staging/DB_HOST" under prefix "/staging/" (or "/staging")
-// becomes "DB_HOST".
+// FromParam strips prefix from paramName, trims any leftover leading slash,
+// and replaces remaining slashes with underscores, so "/staging/DB_HOST"
+// under prefix "/staging/" becomes "DB_HOST", and "/staging/db/password"
+// (a nested parameter) becomes "db_password" rather than the invalid shell
+// identifier "db/password".
 func FromParam(paramName, prefix string) string {
 	name := strings.TrimPrefix(paramName, prefix)
-	return strings.TrimPrefix(name, "/")
+	name = strings.TrimPrefix(name, "/")
+	return strings.ReplaceAll(name, "/", "_")
 }

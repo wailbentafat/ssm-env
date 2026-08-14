@@ -62,6 +62,14 @@ ssm-env --version   # print version and exit
 ssm-env --help       # usage
 ```
 
+### Nested parameter names
+
+SSM lets you nest parameters further for organization, e.g.
+`/staging/myapp/db/password` under path `/staging/myapp/`. Any slashes left
+after stripping the prefix are converted to underscores, so that becomes
+`export db_password=...` rather than the invalid `export db/password=...`.
+If you want a flat `DB_PASSWORD`, name the parameter without nesting.
+
 ### Re-running inside a live container (`docker exec`)
 
 An entrypoint's `eval "$(ssm-env)"` only exports variables into that

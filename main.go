@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -22,7 +23,14 @@ import (
 // version is stamped at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const pathEnvVar = "AWS_ENV_PATH"
+const (
+	pathEnvVar = "AWS_ENV_PATH"
+
+	// fetchTimeout bounds config loading (including IMDS calls) and the SSM
+	// API call, so an unreachable IMDS endpoint or a slow SSM response can't
+	// hang a container's boot sequence indefinitely.
+	fetchTimeout = 10 * time.Second
+)
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -53,7 +61,9 @@ func run(args []string, stdout, stderr *os.File) int {
 		return 0
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+	defer cancel()
+
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		fmt.Fprintf(stderr, "ssm-env: failed to load AWS configuration: %v\n", err)
