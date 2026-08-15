@@ -1,10 +1,11 @@
 # IAM policy
 
-`ssm-env` needs read access to the path it's configured to fetch, plus KMS
-decrypt access if any parameters under that path are `SecureString`. Scope
-both to the specific path prefix — don't grant account-wide SSM access.
+`ssm-env` needs read access to whichever backend(s) it's configured to use
+(`AWS_ENV_BACKEND`), plus KMS decrypt access if any SSM parameters are
+`SecureString`. Scope everything to the specific path prefix / secret ARNs
+— don't grant account-wide SSM or Secrets Manager access.
 
-## Minimal policy
+## Minimal policy — SSM Parameter Store
 
 ```json
 {
@@ -29,6 +30,33 @@ both to the specific path prefix — don't grant account-wide SSM access.
 Replace `REGION`, `ACCOUNT_ID`, `/staging/myapp/*`, and `KEY_ID` (the KMS key
 your `SecureString` parameters are encrypted under — `alias/aws/ssm` if
 you're using the AWS-managed default).
+
+## Minimal policy — Secrets Manager
+
+Needed when `AWS_ENV_BACKEND` is `secretsmanager` or `both`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SsmEnvReadSecrets",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": [
+        "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:staging/db-creds-??????"
+      ]
+    }
+  ]
+}
+```
+
+Secrets Manager appends a random 6-character suffix to a secret's ARN, so
+either list full ARNs (as shown, with `??????` as a wildcard for that
+suffix) or use `staging/*` if the exact ARNs aren't known ahead of time. No
+separate KMS grant is needed for the default `aws/secretsmanager` key —
+`GetSecretValue` implies decrypt for that key; a customer-managed KMS key
+would need its own `kms:Decrypt` statement, same as the SSM case above.
 
 ## Where this attaches
 

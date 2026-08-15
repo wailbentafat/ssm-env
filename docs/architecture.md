@@ -1,61 +1,100 @@
 # Architecture
 
-`ssm-env` is intentionally small: one binary, one external call type, no
-persistent state. This doc explains the internal package layout and why
-things are split the way they are, for anyone extending it.
+`ssm-env` is intentionally small: one binary, no persistent state, secret
+*fetching* kept separate from secret *sourcing* and from *output*. This doc
+explains the internal package layout and why things are split the way they
+are, for anyone extending it.
 
 ## Package layout
 
 ```
-main.go                  CLI entry: flag parsing, env var reading, wiring
-internal/fetch/           SSM API access (pagination, decryption)
-internal/escape/          POSIX shell single-quote escaping
-internal/envname/         Parameter name -> env var name mapping
+main.go                    CLI entry: flag parsing, wiring config -> provider -> filter -> output/exec
+internal/config/           Env var parsing into a typed Config, no AWS/IO
+internal/provider/         SecretProvider interface + SSM, SecretsManager, Multi implementations
+internal/fetch/            SSM API access (pagination, decryption) -- used by provider.SSM
+internal/secretname/       Secrets Manager secret name/key -> env var name mapping
+internal/envname/          SSM parameter name -> env var name mapping
+internal/escape/           POSIX shell single-quote escaping (legacy/eval mode only)
+internal/declared/         Set of already-declared env var names (for AWS_ENV_ONLY_DECLARED)
+internal/execwrap/         os.Setenv + syscall.Exec process-replace wrapper (exec mode only)
 ```
 
 Each package does one thing and is tested in isolation, independent of AWS
-credentials or a real SSM endpoint:
+credentials or a real SSM/Secrets Manager endpoint:
 
+- **`internal/config`** is a pure function of `[]string` ("KEY=VALUE"
+  pairs) to a `Config` struct — no `os.Getenv` calls anywhere else in the
+  codebase. This is what "config decoupled from business logic" means
+  here: `main.go` and `internal/provider` only ever see a `Config` value,
+  never read the environment directly, so swapping the config source
+  (flags, a file) later touches only this package.
+- **`internal/provider`** defines the `SecretProvider` interface
+  (`Fetch(ctx) (map[string]string, error)`) that `main.go` depends on,
+  plus three implementations: `SSM`, `SecretsManager`, and `Multi` (which
+  wraps several providers and merges their results, later ones winning on
+  key collisions). `main.go` never talks to the AWS SDK directly — it
+  builds one `SecretProvider` from `Config` and calls `Fetch` once.
 - **`internal/fetch`** depends on an `SSMClient` interface (the subset of
   the AWS SDK's SSM client this tool actually calls), not the concrete SDK
   client. Tests substitute a fake that returns canned pages, so pagination
   logic is verified without network access or mocking the whole SDK.
+  `provider.SecretsManager` follows the same pattern with a
+  `SecretsManagerClient` interface.
 - **`internal/escape`** has no AWS dependency at all. Its test suite
   round-trips adversarial values through a real `sh -c` invocation — the
   actual eval path a caller will use — rather than only asserting on the
   escaped string shape, since a plausible-looking escape function can still
-  be wrong in ways that only show up when a real shell parses it.
-- **`internal/envname`** is a pure string function (prefix stripping) kept
-  separate from `fetch` because "how AWS names a parameter" and "how we
-  derive an env var name from it" are different concerns that could
-  diverge (e.g. if a future version sanitizes invalid env var characters).
+  be wrong in ways that only show up when a real shell parses it. Exec
+  mode never calls this package: secrets go into `os.Setenv` directly, not
+  through a shell, so there's nothing to escape.
+- **`internal/envname`** / **`internal/secretname`** are pure string
+  functions kept separate from `fetch`/`provider` because "how AWS names a
+  parameter/secret" and "how we derive an env var name from it" are
+  different concerns that could diverge per backend (SSM strips a
+  known path prefix; Secrets Manager has no equivalent prefix, so it uses
+  the secret's basename instead).
+- **`internal/execwrap`** isolates the one piece of process-replacing,
+  irreversible-by-nature code (`syscall.Exec`) behind a small `Run(args,
+  secrets)` function, so it can be tested for its error paths (missing
+  command, unresolvable binary) without actually replacing the test
+  process — the success path is inherently untestable in-process, since
+  it never returns.
 
 ## Data flow
 
 ```
-AWS_ENV_PATH (env var)
+Config (internal/config.Load, from os.Environ())
         |
         v
 config.LoadDefaultConfig()  --  resolves region + credentials via the
         |                        standard SDK chain: env vars -> shared
         |                        config -> EC2 IMDSv2 -> ECS task role
         v
-fetch.AllUnderPath()  --  GetParametersByPath, WithDecryption: true,
-        |                  following NextToken until exhausted
+buildProvider(cfg)  --  selects provider.SSM, provider.SecretsManager,
+        |                or provider.Multi{SSM, SecretsManager} based on
+        |                cfg.Backend
         v
-envname.FromParam()  --  strip path prefix per parameter
-        |
+provider.Fetch(ctx)  --  map[envVarName]value, backend-specific:
+        |                 SSM: fetch.AllUnderPath + envname.FromParam
+        |                 Secrets Manager: one GetSecretValue per secret ID,
+        |                 JSON vs plain-string detection, secretname mapping
         v
-escape.ShellSingleQuote()  --  make each value eval-safe
-        |
+declared.Names() filter  --  if AWS_ENV_ONLY_DECLARED, drop names not
+        |                     already present in the container's env
         v
-stdout: export NAME='value'   (one line per parameter)
-stderr: diagnostics only
+   +---------------------------+
+   |                           |
+no command given          command given after `--`
+   |                           |
+   v                           v
+escape.ShellSingleQuote()  execwrap.Run()  --  os.Setenv per secret, then
+   + print to stdout                          syscall.Exec(cmd), replacing
+   (legacy/eval mode)                          this process (exec mode)
 ```
 
 No step writes to disk. No step caches results. Every invocation repeats
 the whole chain from scratch — see the README's "Behavior notes" for why
-that's a deliberate v1 choice, not a gap.
+that's deliberate, not a gap.
 
 ## Why AWS SDK v2
 
@@ -67,11 +106,23 @@ credential provider chain already implements the IMDSv2
 token-then-fetch handshake correctly, so adopting it is most of the actual
 fix — not custom protocol code in this repo.
 
+## Why exec mode replaces the process instead of forking
+
+`execwrap.Run` uses `syscall.Exec`, not `os/exec.Command(...).Run()`. Exec
+replaces the current process image in place — same PID, no parent process
+left running. A forked child, by contrast, would leave `ssm-env` alive as
+the container's PID 1, responsible for reaping the child and forwarding
+signals correctly (SIGTERM on `docker stop`, etc.) — a whole class of
+init-process bugs this design avoids by simply not existing anymore once
+the target command starts.
+
 ## Extension points
 
-- **Additional backend (e.g. Secrets Manager)**: would live as a sibling to
-  `internal/fetch`, behind a small interface `main.go` selects between
-  based on configuration. Not implemented in v1 (see README Scope).
-- **`--strict` flag**: would change the zero-parameters branch in `main.go`
+- **Additional backend (e.g. Vault, GCP Secret Manager)**: implement
+  `provider.SecretProvider` (one `Fetch(ctx) (map[string]string, error)`
+  method) as a new type in `internal/provider`, wire it into
+  `buildProvider` in `main.go`. No changes needed to `main.go`'s
+  fetch/filter/output flow, `internal/config`, or exec mode.
+- **`--strict` flag**: would change the zero-secrets branch in `main.go`
   from "warn and exit 0" to "error and exit 1". Deferred until there's real
-  usage data on how often a typo'd path actually happens.
+  usage data on how often a typo'd path/secret ID actually happens.
