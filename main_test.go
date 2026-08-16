@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
@@ -66,6 +67,12 @@ func (nilSMClient) GetSecretValue(ctx context.Context, in *secretsmanager.GetSec
 	return nil, errors.New("not called in this test")
 }
 
+type nilRDSClient struct{}
+
+func (nilRDSClient) DescribeDBInstances(ctx context.Context, in *rds.DescribeDBInstancesInput, optFns ...func(*rds.Options)) (*rds.DescribeDBInstancesOutput, error) {
+	return nil, errors.New("not called in this test")
+}
+
 func TestBuildProvider(t *testing.T) {
 	cases := []struct {
 		backend string
@@ -79,7 +86,7 @@ func TestBuildProvider(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.backend, func(t *testing.T) {
-			got, err := buildProvider(envconfig.Config{Backend: c.backend}, nilSSMClient{}, nilSMClient{})
+			got, err := buildProvider(envconfig.Config{Backend: c.backend}, nilSSMClient{}, nilSMClient{}, nilRDSClient{})
 			if c.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")

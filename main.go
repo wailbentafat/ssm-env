@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
@@ -80,7 +81,7 @@ func run(args []string, stdout, stderr *os.File) int {
 		return 1
 	}
 
-	secretProvider, err := buildProvider(cfg, ssm.NewFromConfig(awsCfg), secretsmanager.NewFromConfig(awsCfg))
+	secretProvider, err := buildProvider(cfg, ssm.NewFromConfig(awsCfg), secretsmanager.NewFromConfig(awsCfg), rds.NewFromConfig(awsCfg))
 	if err != nil {
 		fmt.Fprintf(stderr, "ssm-env: %v\n", err)
 		return 2
@@ -128,9 +129,9 @@ func run(args []string, stdout, stderr *os.File) int {
 // buildProvider selects and wires the SecretProvider(s) named by
 // cfg.Backend, keeping backend selection separate from the fetch/filter/
 // output flow in run.
-func buildProvider(cfg envconfig.Config, ssmClient fetch.SSMClient, smClient provider.SecretsManagerClient) (provider.SecretProvider, error) {
+func buildProvider(cfg envconfig.Config, ssmClient fetch.SSMClient, smClient provider.SecretsManagerClient, rdsClient provider.RDSClient) (provider.SecretProvider, error) {
 	ssmProvider := provider.SSM{Client: ssmClient, Path: cfg.Path}
-	smProvider := provider.SecretsManager{Client: smClient, SecretIDs: cfg.SecretIDs}
+	smProvider := provider.SecretsManager{Client: smClient, RDSClient: rdsClient, SecretIDs: cfg.SecretIDs}
 
 	switch cfg.Backend {
 	case envconfig.BackendSSM:
